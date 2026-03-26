@@ -28,4 +28,4 @@ COPY --from=builder /app/dist ./dist
 EXPOSE 3000
 
 # Run schema migrations safely before launching the API in production.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:prod"]

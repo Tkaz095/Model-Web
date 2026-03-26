@@ -18,7 +18,7 @@ export const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: databaseUrl }),
 });
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 const vrmUploadDir = path.resolve(process.cwd(), 'uploads', 'vrm');
 const defaultCharacterId = process.env.DEFAULT_CHARACTER_ID || 'default-character';
 
@@ -247,14 +247,21 @@ const safeDeleteFile = async (absoluteFilePath: string): Promise<void> => {
 };
 
 app.get('/health', async (req, res) => {
+  let dbConnected = false;
+
   try {
     // Simple query to check DB connection
     await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({ status: 'ok', message: 'Backend is running and database is connected' });
+    dbConnected = true;
   } catch (error) {
     console.error('Database connection error:', error);
-    res.status(500).json({ status: 'error', message: 'Database connection failed' });
   }
+
+  return res.status(200).json({
+    status: 'ok',
+    service: 'backend',
+    dbConnected,
+  });
 });
 
 app.get('/api/users', async (req, res) => {
