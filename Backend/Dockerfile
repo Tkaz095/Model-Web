@@ -1,39 +1,31 @@
-# Build stage
-FROM node:20-alpine AS builder
+# syntax=docker/dockerfile:1
 
+FROM node:20-alpine AS base
 WORKDIR /app
+RUN apk add --no-cache openssl libc6-compat
 
-# Copy package files
+FROM base AS deps
 COPY package*.json ./
 COPY prisma ./prisma/
-
-# Install dependencies and generate Prisma client
-RUN npm install
+RUN npm ci
 RUN npx prisma generate
 
-# Copy the rest of the application
-COPY . .
-
-# Build TypeScript to JavaScript
+FROM deps AS builder
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
+FROM base AS production
+ENV NODE_ENV=production
 
-WORKDIR /app
-
-# Copy package files
 COPY package*.json ./
 COPY prisma ./prisma/
-
-# Install only production dependencies and generate Prisma client
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 RUN npx prisma generate
 
-# Copy built app from builder
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
-# Start command: we can also run migrations here in an entrypoint but to keep it simple, just start the app
-CMD ["npm", "start"]
+# Run schema migrations safely before launching the API in production.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]

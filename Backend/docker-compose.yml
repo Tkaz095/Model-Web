@@ -27,9 +27,13 @@ services:
     restart: always
     ports:
       - '3000:3000'
+    volumes:
+      - ./uploads:/app/uploads
     environment:
       - DATABASE_URL=postgresql://admin:adminpassword@db:5432/backend_db?schema=public
       - PORT=3000
+      - DEFAULT_VOICE_VN=vi-VN-HoaiMyNeural
+      - DEFAULT_VOICE_EN=en-US-GuyNeural
     depends_on:
       db:
         condition: service_healthy

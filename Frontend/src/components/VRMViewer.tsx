@@ -1,10 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils, VRM, VRMHumanBoneName, VRMExpressionPresetName } from '@pixiv/three-vrm';
+import { VRMLoaderPlugin, VRMUtils, VRM, VRMExpressionPresetName } from '@pixiv/three-vrm';
+import { sendToSpeak } from '../services/speakApi';
+import { AnimationManager } from './AnimationManager';
 
 export interface VRMViewerRef {
   loadVRM: (fileUrl: string) => void;
+  clearVRM: () => void;
   triggerExpression: (expression: string) => void;
   triggerGesture: (gesture: string) => void;
   speakText: (text: string, lang: string) => void;
@@ -19,13 +22,36 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
   
   const sceneRef = useRef(new THREE.Scene());
   const vrmRef = useRef<VRM | null>(null);
+  const animationManagerRef = useRef(new AnimationManager());
+  const audioListenerRef = useRef<THREE.AudioListener | null>(null);
+  const voiceAudioRef = useRef<THREE.Audio | null>(null);
+  const audioAnalyserRef = useRef<THREE.AudioAnalyser | null>(null);
+  const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
   
   const stateRef = useRef({
     clock: new THREE.Clock(),
     isSpeaking: false,
-    currentGesture: null as string | null,
-    gestureTime: 0
+    mouthOpen: 0,
   });
+
+  const closeMouth = () => {
+    stateRef.current.isSpeaking = false;
+    stateRef.current.mouthOpen = 0;
+    if (vrmRef.current?.expressionManager) {
+      vrmRef.current.expressionManager.setValue('aa', 0);
+    }
+  };
+
+  const clearCurrentVrm = () => {
+    if (!vrmRef.current) {
+      return;
+    }
+
+    animationManagerRef.current.clear();
+    sceneRef.current.remove(vrmRef.current.scene);
+    VRMUtils.deepDispose(vrmRef.current.scene);
+    vrmRef.current = null;
+  };
 
   useImperativeHandle(ref, () => ({
     loadVRM: (fileUrl: string) => {
@@ -38,10 +64,7 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
           const loadedVrm = gltf.userData.vrm;
           if (loadedVrm) {
             // Remove the old VRM if exists
-            if (vrmRef.current) {
-              sceneRef.current.remove(vrmRef.current.scene);
-              VRMUtils.deepDispose(vrmRef.current.scene);
-            }
+            clearCurrentVrm();
             
             VRMUtils.removeUnnecessaryVertices(gltf.scene);
             VRMUtils.removeUnnecessaryJoints(gltf.scene);
@@ -49,6 +72,7 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
             loadedVrm.scene.rotation.y = Math.PI; // Rotate to face camera
             sceneRef.current.add(loadedVrm.scene);
             vrmRef.current = loadedVrm;
+            animationManagerRef.current.setVrm(loadedVrm);
             
             if (onLoaded) onLoaded();
           }
@@ -56,6 +80,9 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
         (progress) => console.log('Loading model...', 100.0 * (progress.loaded / progress.total), '%'),
         (error) => console.error(error)
       );
+    },
+    clearVRM: () => {
+      clearCurrentVrm();
     },
     triggerExpression: (expression: string) => {
       if (!vrmRef.current) return;
@@ -71,46 +98,64 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
       }
     },
     triggerGesture: (gesture: string) => {
-      // 'wave', 'nod' etc.
-      stateRef.current.currentGesture = gesture;
-      stateRef.current.gestureTime = 0;
+      animationManagerRef.current.playGesture(gesture);
     },
-    speakText: (text: string) => {
-      if (!('speechSynthesis' in window)) return;
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech
-      const utterance = new SpeechSynthesisUtterance(text);
-      
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Aggressive multi-lingual female voice finder
-      // Google TTS usually provides excellent multi-lingual female voices.
-      // Zira/HoaiMy are Windows defaults.
-      let selectedVoice = voices.find(v => 
-        v.name.includes('Google') && v.name.includes('Female') ||
-        v.name.includes('HoaiMy') || 
-        v.name.includes('Zira') || 
-        v.name.toLowerCase().includes('female')
-      );
+    speakText: async (text: string, lang: string) => {
+      if (!text.trim()) return;
 
-      // Fallback to any Google voice (usually female) or the first available
-      if (!selectedVoice) {
-         selectedVoice = voices.find(v => v.name.includes('Google')) || voices[0];
-      }
+      try {
+        const audioBuffer = await sendToSpeak(text, lang);
+        const listener = audioListenerRef.current;
+        const voiceAudio = voiceAudioRef.current;
+        if (!listener || !voiceAudio) return;
 
-      if (selectedVoice) utterance.voice = selectedVoice;
-
-      utterance.pitch = 1.3; // Hardcode feminine pitch
-      utterance.rate = 1.05; // Slightly faster for natural feel
-      utterance.volume = 1;
-      utterance.onstart = () => { stateRef.current.isSpeaking = true; };
-      utterance.onend = () => { 
-        stateRef.current.isSpeaking = false; 
-        if (vrmRef.current) {
-          vrmRef.current.expressionManager?.setValue(VRMExpressionPresetName.Aa, 0);
+        // Required on many browsers after user interaction.
+        if (listener.context.state === 'suspended') {
+          await listener.context.resume();
         }
-      };
-      // Randomize pitch/rate for fun or keep defaults
-      window.speechSynthesis.speak(utterance);
+
+        if (voiceAudio.isPlaying) {
+          voiceAudio.stop();
+        }
+
+        if (htmlAudioRef.current) {
+          htmlAudioRef.current.pause();
+          htmlAudioRef.current = null;
+        }
+
+        stateRef.current.isSpeaking = true;
+
+        try {
+          const decodedBuffer = await listener.context.decodeAudioData(audioBuffer.slice(0));
+          voiceAudio.setBuffer(decodedBuffer);
+          voiceAudio.setLoop(false);
+          voiceAudio.setVolume(1.0);
+          voiceAudio.play();
+
+          if (voiceAudio.source) {
+            voiceAudio.source.onended = () => {
+              closeMouth();
+            };
+          }
+          return;
+        } catch (_decodeError) {
+          // Fallback path for browsers/codecs where decodeAudioData fails.
+          const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+          const objectUrl = URL.createObjectURL(blob);
+          const htmlAudio = new Audio(objectUrl);
+          htmlAudioRef.current = htmlAudio;
+          htmlAudio.onended = () => {
+            URL.revokeObjectURL(objectUrl);
+            htmlAudioRef.current = null;
+            closeMouth();
+          };
+          await htmlAudio.play();
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to speak text:', error);
+        closeMouth();
+      }
     }
   }));
 
@@ -131,6 +176,14 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
     const camera = new THREE.PerspectiveCamera(30.0, width / height, 0.1, 20.0);
     camera.position.set(0.0, 1.4, 3.0);
 
+    const audioListener = new THREE.AudioListener();
+    camera.add(audioListener);
+    audioListenerRef.current = audioListener;
+
+    const voiceAudio = new THREE.Audio(audioListener);
+    voiceAudioRef.current = voiceAudio;
+    audioAnalyserRef.current = new THREE.AudioAnalyser(voiceAudio, 64);
+
     // Light
     const light = new THREE.DirectionalLight(0xffffff, Math.PI);
     light.position.set(1.0, 1.0, 1.0).normalize();
@@ -149,79 +202,20 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
       if (vrmRef.current) {
         // Handle Lip Sync if speaking
         if (stateRef.current.isSpeaking) {
-          // Simple random lip sync
-          const mouthOpen = Math.random() * 0.8 + 0.2; // 0.2 to 1.0
-          // Smooth it slightly by interpolating or just setting
-          vrmRef.current.expressionManager?.setValue(VRMExpressionPresetName.Aa, mouthOpen);
-        }
-
-        // ------ DEFAULT / IDLE ANIMATION ------
-        const rightArm = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
-        const leftArm = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
-        const spine = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
-        
-        // Relax arms (A-pose)
-        if (rightArm) rightArm.rotation.set(0, 0, -1.2);
-        if (leftArm) leftArm.rotation.set(0, 0, 1.2);
-
-        // Breathing 
-        if (spine) {
-            spine.rotation.set(Math.sin(stateRef.current.clock.elapsedTime * 2) * 0.02, 0, 0);
-        }
-
-        // Handle Gestures
-        const gesture = stateRef.current.currentGesture;
-        if (gesture) {
-          stateRef.current.gestureTime += deltaTime;
-          const t = stateRef.current.gestureTime;
-          
-          if (gesture === 'wave') {
-            if (rightArm) {
-              if (t < 2.0) {
-                 // wave animation math: lift arm, and rotate back and forth
-                 rightArm.rotation.z = Math.sin(t * 10) * 0.5 - 1.0; 
-                 rightArm.rotation.x = 0.5;
-              } else {
-                 stateRef.current.currentGesture = null;
-              }
-            }
-          } else if (gesture === 'nod') {
-             const neck = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Neck);
-             if (neck) {
-                if (t < 1.0) {
-                  neck.rotation.x = Math.sin(t * Math.PI * 2) * 0.2;
-                } else {
-                  neck.rotation.set(0,0,0);
-                  stateRef.current.currentGesture = null;
-                }
-             }
-          } else if (gesture === 'dance') {
-             if (spine) {
-                if (t < 3.0) {
-                  // Core bounce
-                  spine.rotation.z = Math.sin(t * 8) * 0.1;
-                  spine.rotation.x = Math.sin(t * 4) * 0.1;
-                  
-                  // Arms swinging
-                  if (rightArm) rightArm.rotation.z = Math.sin(t * 8) * 0.5 - 1.0;
-                  if (leftArm) leftArm.rotation.z = Math.cos(t * 8) * 0.5 + 1.0;
-                  
-                  // Legs dancing
-                  const leftUpperLeg = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperLeg);
-                  const rightUpperLeg = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperLeg);
-                  const leftLowerLeg = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerLeg);
-                  const rightLowerLeg = vrmRef.current.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerLeg);
-                  
-                  if (leftUpperLeg) leftUpperLeg.rotation.x = Math.sin(t * 8) * 0.2;
-                  if (rightUpperLeg) rightUpperLeg.rotation.x = Math.cos(t * 8) * 0.2;
-                  if (leftLowerLeg) leftLowerLeg.rotation.x = Math.abs(Math.sin(t * 8)) * -0.2;
-                  if (rightLowerLeg) rightLowerLeg.rotation.x = Math.abs(Math.cos(t * 8)) * -0.2;
-                } else {
-                  stateRef.current.currentGesture = null;
-                }
-             }
+          const analyser = audioAnalyserRef.current;
+          const averageFrequency = analyser ? analyser.getAverageFrequency() : 0;
+          const normalizedVolume = THREE.MathUtils.clamp(averageFrequency / 90, 0, 1);
+          stateRef.current.mouthOpen = THREE.MathUtils.lerp(stateRef.current.mouthOpen, normalizedVolume, 0.45);
+          vrmRef.current.expressionManager?.setValue('aa', stateRef.current.mouthOpen);
+        } else if (stateRef.current.mouthOpen > 0) {
+          stateRef.current.mouthOpen = THREE.MathUtils.lerp(stateRef.current.mouthOpen, 0, 0.35);
+          if (stateRef.current.mouthOpen < 0.01) {
+            stateRef.current.mouthOpen = 0;
           }
+          vrmRef.current.expressionManager?.setValue('aa', stateRef.current.mouthOpen);
         }
+
+        animationManagerRef.current.update(stateRef.current.clock.elapsedTime);
         
         // Update VRM
         vrmRef.current.update(deltaTime);
@@ -244,6 +238,19 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
     return () => {
       window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(animationFrameId);
+
+      if (voiceAudioRef.current?.isPlaying) {
+        voiceAudioRef.current.stop();
+      }
+      if (htmlAudioRef.current) {
+        htmlAudioRef.current.pause();
+        htmlAudioRef.current = null;
+      }
+      audioAnalyserRef.current = null;
+      voiceAudioRef.current = null;
+      audioListenerRef.current = null;
+      animationManagerRef.current.dispose();
+
       if (currentContainer) {
         currentContainer.removeChild(renderer.domElement);
       }

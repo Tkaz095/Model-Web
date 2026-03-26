@@ -5,7 +5,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -14,4 +13,33 @@ model User {
   name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model CharacterConfig {
+  id          Int      @id @default(autoincrement())
+  characterId String   @unique @map("character_id")
+  provider    String   @default("edge-tts")
+  voiceName   String   @map("voice_name")
+  pitch       Float    @default(1.0)
+  speed       Float    @default(1.0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("character_configs")
+}
+
+model VrmModel {
+  id           Int      @id @default(autoincrement())
+  characterId  String   @map("character_id")
+  originalName String   @map("original_name")
+  fileName     String   @unique @map("file_name")
+  filePath     String   @map("file_path")
+  fileUrl      String   @map("file_url")
+  mimeType     String   @map("mime_type")
+  size         Int
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([characterId])
+  @@map("vrm_models")
 }

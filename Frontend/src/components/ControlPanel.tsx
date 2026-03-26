@@ -2,12 +2,27 @@ import React, { useState } from 'react';
 
 interface ControlPanelProps {
   onLoadModel: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onDeleteModel: () => void;
   onExpression: (expr: string) => void;
   onGesture: (gesture: string) => void;
   onSpeak: (text: string, lang: string) => void;
+  canDeleteModel: boolean;
+  uploadStatus: 'idle' | 'uploading' | 'success' | 'error';
+  uploadProgress: number;
+  uploadMessage: string;
 }
 
-const ControlPanel: React.FC<ControlPanelProps> = ({ onLoadModel, onExpression, onGesture, onSpeak }) => {
+const ControlPanel: React.FC<ControlPanelProps> = ({
+  onLoadModel,
+  onDeleteModel,
+  onExpression,
+  onGesture,
+  onSpeak,
+  canDeleteModel,
+  uploadStatus,
+  uploadProgress,
+  uploadMessage,
+}) => {
   const [text, setText] = useState('');
   const [language, setLanguage] = useState('vi-VN');
 
@@ -16,6 +31,30 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ onLoadModel, onExpression, 
       <div className="panel-section">
         <h3>Tải Nhân Vật (VRM)</h3>
         <input type="file" accept=".vrm" onChange={onLoadModel} className="btn" />
+        <button
+          className="btn btn-danger"
+          onClick={onDeleteModel}
+          disabled={!canDeleteModel}
+          style={{ marginTop: '0.5rem', maxWidth: '220px' }}
+        >
+          Xóa model hiện tại
+        </button>
+        <p style={{ marginTop: '0.5rem', opacity: 0.8, fontSize: '0.85rem' }}>
+          Mẹo: Bạn có thể Ctrl+V file .vrm trên trang để tự động tải lên backend.
+        </p>
+        {uploadStatus !== 'idle' && (
+          <div className="upload-status-wrap">
+            {uploadStatus === 'uploading' && (
+              <div className="upload-progress-track">
+                <div
+                  className="upload-progress-fill"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            )}
+            <p className={`upload-status-text ${uploadStatus}`}>{uploadMessage}</p>
+          </div>
+        )}
       </div>
 
       <div className="panel-section">

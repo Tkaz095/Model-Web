@@ -5,24 +5,32 @@
   "main": "index.js",
   "scripts": {
     "start": "node dist/index.js",
-    "dev": "nodemon src/index.ts",
+    "dev": "nodemon --exec ts-node src/index.ts",
     "build": "npx tsc",
-    "db:migrate": "npx prisma migrate dev --name init"
+    "prisma:generate": "npx prisma generate",
+    "db:migrate": "npx prisma migrate dev --name init",
+    "db:migrate:deploy": "npx prisma migrate deploy",
+    "db:push": "npx prisma db push"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "msedge-tts": "^2.0.4",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
     "prisma": "^7.5.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.0.0",
     "@types/node": "^25.5.0",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
