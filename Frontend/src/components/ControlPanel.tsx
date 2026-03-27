@@ -25,6 +25,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 }) => {
   const [text, setText] = useState('');
   const [language, setLanguage] = useState('vi-VN');
+  const animationButtons: Array<{ key: string; label: string }> = [
+    { key: 'Relax', label: '� Relax (Idle)' },
+    { key: 'Goodbye', label: '👋 Goodbye (Chào)' },
+    { key: 'Thinking', label: '🤔 Thinking' },
+    { key: 'Clapping', label: '👏 Clapping' },
+    { key: 'LookAround', label: '👀 LookAround' },
+    { key: 'Jump', label: '🦘 Jump' },
+    { key: 'Angry', label: '😠 Angry' },
+    { key: 'Sad', label: '😢 Sad' },
+    { key: 'Surprised', label: '😮 Surprised' },
+    { key: 'Sleepy', label: '😴 Sleepy' },
+    { key: 'Blush', label: '😊 Blush' },
+  ];
 
   return (
     <div className="control-panel glass-panel">
@@ -58,11 +71,17 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       <div className="panel-section">
-        <h3>Cử Chỉ (Gestures)</h3>
+        <h3>Animation (VRMA)</h3>
         <div className="button-group">
-          <button className="btn btn-primary" onClick={() => onGesture('wave')}>👋 Chào</button>
-          <button className="btn btn-primary" onClick={() => onGesture('nod')}>👍 Gật Đầu</button>
-          <button className="btn btn-primary" onClick={() => onGesture('dance')}>💃 Nhảy/Múa</button>
+          {animationButtons.map((item) => (
+            <button
+              key={item.key}
+              className="btn btn-primary"
+              onClick={() => onGesture(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </div>
 

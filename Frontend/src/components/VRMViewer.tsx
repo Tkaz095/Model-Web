@@ -73,6 +73,7 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
             sceneRef.current.add(loadedVrm.scene);
             vrmRef.current = loadedVrm;
             animationManagerRef.current.setVrm(loadedVrm);
+            void animationManagerRef.current.play('Relax');
             
             if (onLoaded) onLoaded();
           }
@@ -215,7 +216,7 @@ const VRMViewer = forwardRef<VRMViewerRef, VRMViewerProps>(({ onLoaded }, ref) =
           vrmRef.current.expressionManager?.setValue('aa', stateRef.current.mouthOpen);
         }
 
-        animationManagerRef.current.update(stateRef.current.clock.elapsedTime);
+        animationManagerRef.current.update(deltaTime);
         
         // Update VRM
         vrmRef.current.update(deltaTime);

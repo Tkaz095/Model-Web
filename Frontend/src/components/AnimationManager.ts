@@ -1,295 +1,195 @@
 import * as THREE from 'three';
-import { gsap } from 'gsap';
-import { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { VRM } from '@pixiv/three-vrm';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
 type GestureName = 'wave' | 'nod' | 'dance';
 
-interface VrmBones {
-  rightUpperArm: THREE.Object3D | null;
-  rightLowerArm: THREE.Object3D | null;
-  rightHand: THREE.Object3D | null;
-  leftUpperArm: THREE.Object3D | null;
-  spine: THREE.Object3D | null;
-  neck: THREE.Object3D | null;
-}
-
 export class AnimationManager {
   private vrm: VRM | null = null;
-  private activeTimeline: gsap.core.Timeline | null = null;
-  private gestureRunning = false;
+  private mixer: THREE.AnimationMixer | null = null;
+  private currentAction: THREE.AnimationAction | null = null;
+  private currentAnimationName: string | null = null;
+  private clipCache = new Map<string, THREE.AnimationClip>();
+  private loadingCache = new Map<string, Promise<THREE.AnimationClip | null>>();
+
+  private readonly animationUrls: Record<string, string> = {
+    Idle: '/animations/Idle.vrma',
+    Angry: '/animations/Angry.vrma',
+    Blush: '/animations/Blush.vrma',
+    Clapping: '/animations/Clapping.vrma',
+    Goodbye: '/animations/Goodbye.vrma',
+    Jump: '/animations/Jump.vrma',
+    LookAround: '/animations/LookAround.vrma',
+    Relax: '/animations/Relax.vrma',
+    Sad: '/animations/Sad.vrma',
+    Sleepy: '/animations/Sleepy.vrma',
+    Surprised: '/animations/Surprised.vrma',
+    Thinking: '/animations/Thinking.vrma',
+  };
 
   setVrm(vrm: VRM | null): void {
-    this.stopGesture();
+    this.stopAll();
     this.vrm = vrm;
+    this.mixer = vrm ? new THREE.AnimationMixer(vrm.scene) : null;
+    this.clipCache.clear();
+    this.loadingCache.clear();
+
+    // Start from idle when possible.
+    if (vrm) {
+      void this.play('Relax');
+    }
   }
 
   clear(): void {
-    this.stopGesture();
+    this.stopAll();
     this.vrm = null;
+    this.mixer = null;
+    this.currentAction = null;
+    this.currentAnimationName = null;
+    this.clipCache.clear();
+    this.loadingCache.clear();
   }
 
   playGesture(gesture: string): void {
-    if (!this.vrm) {
+    const normalized = gesture.trim().toLowerCase() as GestureName | string;
+
+    // Backward-compatible aliases from old gesture buttons.
+    if (normalized === 'wave') {
+      void this.play('Goodbye');
+      return;
+    }
+    if (normalized === 'nod') {
+      void this.play('Thinking');
+      return;
+    }
+    if (normalized === 'dance') {
+      void this.play('Clapping');
       return;
     }
 
-    const normalized = gesture.toLowerCase() as GestureName;
-    switch (normalized) {
-      case 'wave':
-        this.playWave();
-        return;
-      case 'nod':
-        this.playNod();
-        return;
-      case 'dance':
-        this.playDance();
-        return;
-      default:
-        return;
+    // New direct menu keys (matching file names in public/animations).
+    const exactKey = Object.keys(this.animationUrls).find(
+      (name) => name.toLowerCase() === normalized
+    );
+
+    if (exactKey) {
+      void this.play(exactKey);
     }
   }
 
-  update(elapsedTime: number): void {
+  async loadVRMA(url: string, animationName?: string): Promise<THREE.AnimationClip | null> {
     if (!this.vrm) {
+      return null;
+    }
+
+    const cacheKey = animationName ?? url;
+    const cached = this.clipCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const loading = this.loadingCache.get(cacheKey);
+    if (loading) {
+      return loading;
+    }
+
+    const loader = new GLTFLoader();
+    loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+
+    const request = new Promise<THREE.AnimationClip | null>((resolve) => {
+      loader.load(
+        url,
+        (gltf) => {
+          const vrmAnimations = (gltf.userData.vrmAnimations ?? []) as unknown[];
+          const vrmAnimation = vrmAnimations[0];
+          if (!vrmAnimation || !this.vrm) {
+            resolve(null);
+            return;
+          }
+
+          const clip = createVRMAnimationClip(vrmAnimation as never, this.vrm);
+          clip.name = cacheKey;
+          this.clipCache.set(cacheKey, clip);
+          resolve(clip);
+        },
+        undefined,
+        (error) => {
+          console.warn(`Failed to load VRMA: ${url}`, error);
+          resolve(null);
+        }
+      );
+    }).finally(() => {
+      this.loadingCache.delete(cacheKey);
+    });
+
+    this.loadingCache.set(cacheKey, request);
+    return request;
+  }
+
+  async play(animationName: string): Promise<void> {
+    if (!this.vrm || !this.mixer) {
       return;
     }
 
-    const bones = this.getBones();
-
-    // Keep a stable idle pose when no gesture is running.
-    if (!this.gestureRunning) {
-      if (bones.rightUpperArm) {
-        bones.rightUpperArm.rotation.x = THREE.MathUtils.lerp(bones.rightUpperArm.rotation.x, 0, 0.14);
-        bones.rightUpperArm.rotation.y = THREE.MathUtils.lerp(bones.rightUpperArm.rotation.y, 0, 0.14);
-        bones.rightUpperArm.rotation.z = THREE.MathUtils.lerp(bones.rightUpperArm.rotation.z, -1.2, 0.14);
-      }
-
-      if (bones.leftUpperArm) {
-        bones.leftUpperArm.rotation.x = THREE.MathUtils.lerp(bones.leftUpperArm.rotation.x, 0, 0.14);
-        bones.leftUpperArm.rotation.y = THREE.MathUtils.lerp(bones.leftUpperArm.rotation.y, 0, 0.14);
-        bones.leftUpperArm.rotation.z = THREE.MathUtils.lerp(bones.leftUpperArm.rotation.z, 1.2, 0.14);
-      }
-
-      if (bones.spine) {
-        const idleBreath = Math.sin(elapsedTime * 2.0) * 0.02;
-        bones.spine.rotation.x = THREE.MathUtils.lerp(bones.spine.rotation.x, idleBreath, 0.12);
-      }
-
-      if (bones.neck) {
-        bones.neck.rotation.x = THREE.MathUtils.lerp(bones.neck.rotation.x, 0, 0.18);
-      }
+    const url = this.animationUrls[animationName] ?? `/animations/${animationName}.vrma`;
+    const clip = await this.loadVRMA(url, animationName);
+    if (!clip || !this.mixer) {
+      return;
     }
+
+    const nextAction = this.mixer.clipAction(clip);
+    const isIdle = animationName === 'Relax';
+
+    nextAction.enabled = true;
+    nextAction.setLoop(isIdle ? THREE.LoopRepeat : THREE.LoopOnce, isIdle ? Infinity : 1);
+    nextAction.clampWhenFinished = !isIdle;
+    nextAction.reset();
+
+    if (this.currentAction && this.currentAction !== nextAction) {
+      this.currentAction.crossFadeTo(nextAction, 0.28, true);
+    } else {
+      nextAction.fadeIn(0.28);
+    }
+
+    nextAction.play();
+    this.currentAction = nextAction;
+    this.currentAnimationName = animationName;
+
+    if (!isIdle) {
+      const onFinished = (event: { action?: THREE.AnimationAction }) => {
+        if (event.action !== nextAction || !this.mixer) {
+          return;
+        }
+        this.mixer.removeEventListener('finished', onFinished);
+        if (this.currentAnimationName === animationName) {
+          void this.play('Relax');
+        }
+      };
+      this.mixer.addEventListener('finished', onFinished);
+    }
+  }
+
+  update(deltaTime: number): void {
+    if (!this.mixer) {
+      return;
+    }
+    this.mixer.update(deltaTime);
   }
 
   dispose(): void {
-    this.stopGesture();
+    this.stopAll();
     this.vrm = null;
+    this.mixer = null;
+    this.currentAction = null;
+    this.currentAnimationName = null;
+    this.clipCache.clear();
+    this.loadingCache.clear();
   }
 
-  private stopGesture(): void {
-    if (this.activeTimeline) {
-      this.activeTimeline.kill();
-      this.activeTimeline = null;
+  private stopAll(): void {
+    if (this.mixer) {
+      this.mixer.stopAllAction();
     }
-    this.gestureRunning = false;
-  }
-
-  private getBones(): VrmBones {
-    const getBoneNode = (boneName: VRMHumanBoneName): THREE.Object3D | null => {
-      const normalizedBone = this.vrm?.humanoid?.getNormalizedBoneNode(boneName) || null;
-      if (normalizedBone) {
-        return normalizedBone;
-      }
-
-      return this.vrm?.humanoid?.getRawBoneNode(boneName) || null;
-    };
-
-    return {
-      rightUpperArm: getBoneNode(VRMHumanBoneName.RightUpperArm),
-      rightLowerArm: getBoneNode(VRMHumanBoneName.RightLowerArm),
-      rightHand: getBoneNode(VRMHumanBoneName.RightHand),
-      leftUpperArm: getBoneNode(VRMHumanBoneName.LeftUpperArm),
-      spine: getBoneNode(VRMHumanBoneName.Spine),
-      neck: getBoneNode(VRMHumanBoneName.Neck),
-    };
-  }
-
-  private playWave(): void {
-    const bones = this.getBones();
-    const mainWaveBone = bones.rightUpperArm || bones.rightLowerArm || bones.rightHand;
-    if (!mainWaveBone) {
-      return;
-    }
-
-    this.stopGesture();
-    this.gestureRunning = true;
-
-    const tl = gsap.timeline({
-      defaults: { overwrite: true },
-      onComplete: () => {
-        this.gestureRunning = false;
-        this.activeTimeline = null;
-      },
-    });
-
-    // Raise arm high (~120deg-like pose) then wave widely.
-    tl.to(mainWaveBone.rotation, {
-      x: -0.35,
-      y: 0.0,
-      z: -2.1,
-      duration: 0.4,
-      ease: 'power3.out',
-    }, 0);
-
-    if (bones.rightLowerArm) {
-      tl.to(bones.rightLowerArm.rotation, {
-        z: -0.85,
-        duration: 0.35,
-        ease: 'power2.out',
-      }, 0);
-    }
-
-    // Light spring/bounce on the torso for natural motion.
-    if (bones.spine) {
-      tl.to(bones.spine.rotation, {
-        x: 0.12,
-        duration: 0.22,
-        ease: 'power2.out',
-        yoyo: true,
-        repeat: 3,
-      }, 0.12);
-    }
-
-    // Wide waving arc, around 120deg total swing.
-    tl.to(mainWaveBone.rotation, {
-      z: -0.2,
-      duration: 0.17,
-      ease: 'sine.inOut',
-      repeat: 7,
-      yoyo: true,
-    }, 0.45);
-
-    // Return to idle stance automatically.
-    tl.to(mainWaveBone.rotation, {
-      x: 0,
-      y: 0,
-      z: -1.2,
-      duration: 0.45,
-      ease: 'power2.out',
-    }, '>-0.05');
-
-    if (bones.rightLowerArm) {
-      tl.to(bones.rightLowerArm.rotation, {
-        z: 0,
-        duration: 0.35,
-        ease: 'power2.out',
-      }, '<');
-    }
-
-    if (bones.spine) {
-      tl.to(bones.spine.rotation, {
-        x: 0,
-        duration: 0.3,
-        ease: 'power2.out',
-      }, '<');
-    }
-
-    this.activeTimeline = tl;
-  }
-
-  private playNod(): void {
-    const bones = this.getBones();
-    if (!bones.neck) {
-      return;
-    }
-
-    this.stopGesture();
-    this.gestureRunning = true;
-
-    const tl = gsap.timeline({
-      onComplete: () => {
-        this.gestureRunning = false;
-        this.activeTimeline = null;
-      },
-    });
-
-    tl.to(bones.neck.rotation, {
-      x: 0.26,
-      duration: 0.18,
-      ease: 'power2.out',
-      yoyo: true,
-      repeat: 3,
-    });
-
-    tl.to(bones.neck.rotation, {
-      x: 0,
-      duration: 0.2,
-      ease: 'power2.out',
-    });
-
-    this.activeTimeline = tl;
-  }
-
-  private playDance(): void {
-    const bones = this.getBones();
-    if (!bones.spine || !bones.rightUpperArm || !bones.leftUpperArm) {
-      return;
-    }
-
-    this.stopGesture();
-    this.gestureRunning = true;
-
-    const tl = gsap.timeline({
-      onComplete: () => {
-        this.gestureRunning = false;
-        this.activeTimeline = null;
-      },
-    });
-
-    tl.to(bones.spine.rotation, {
-      z: 0.14,
-      x: 0.08,
-      duration: 0.18,
-      yoyo: true,
-      repeat: 9,
-      ease: 'sine.inOut',
-    }, 0);
-
-    tl.to(bones.rightUpperArm.rotation, {
-      z: -0.55,
-      duration: 0.18,
-      yoyo: true,
-      repeat: 9,
-      ease: 'sine.inOut',
-    }, 0);
-
-    tl.to(bones.leftUpperArm.rotation, {
-      z: 0.55,
-      duration: 0.18,
-      yoyo: true,
-      repeat: 9,
-      ease: 'sine.inOut',
-    }, 0);
-
-    tl.to(bones.rightUpperArm.rotation, {
-      z: -1.2,
-      duration: 0.35,
-      ease: 'power2.out',
-    });
-
-    tl.to(bones.leftUpperArm.rotation, {
-      z: 1.2,
-      duration: 0.35,
-      ease: 'power2.out',
-    }, '<');
-
-    tl.to(bones.spine.rotation, {
-      x: 0,
-      z: 0,
-      duration: 0.3,
-      ease: 'power2.out',
-    }, '<');
-
-    this.activeTimeline = tl;
   }
 }
